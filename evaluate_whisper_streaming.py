@@ -6,6 +6,7 @@ import evaluate
 
 wer = evaluate.load("wer")
 
+
 def norm(text):
     return whisper_asr.tokenizer._normalize(text)
 
@@ -32,14 +33,19 @@ def evaluate(batch):
 
     return batch
 
+
 def main(args):
     batch_size = args.batch_size
 
-    whisper_asr = pipeline("automatic-speech-recognition", model=args.model_id, device=args.device)
+    whisper_asr = pipeline(
+        "automatic-speech-recognition", model=args.model_id, device=args.device
+    )
     whisper_asr.model.config.max_length = 128
 
-    dataset = load_dataset(args.dataset, args.config, split=args.split, streaming=True, use_auth_token=True)
-    
+    dataset = load_dataset(
+        args.dataset, args.config, split=args.split, streaming=True, use_auth_token=True
+    )
+
     # Only uncomment for debugging
     dataset = dataset.take(64)
 
@@ -47,12 +53,16 @@ def main(args):
     preds = []
     refs = []
 
-    result_set = dataset.map(evaluate, batched=True, batch_size=batch_size, remove_columns=dataset.features.keys())
+    result_set = dataset.map(
+        evaluate,
+        batched=True,
+        batch_size=batch_size,
+        remove_columns=dataset.features.keys(),
+    )
 
     for i, result in enumerate(iter(result_set)):
         ref = norm(result["ref"])
         pred = norm(result["pred"])
-
 
         refs.append(ref)
         preds.append(pred)
@@ -62,11 +72,15 @@ def main(args):
 
     print(wer_result)
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
-        "--model_id", type=str, required=True, help="Model identifier. Should be loadable with 🤗 Transformers"
+        "--model_id",
+        type=str,
+        required=True,
+        help="Model identifier. Should be loadable with 🤗 Transformers",
     )
     parser.add_argument(
         "--dataset",
@@ -75,12 +89,19 @@ if __name__ == "__main__":
         help="Dataset name to evaluate the `model_id`. Should be loadable with 🤗 Datasets",
     )
     parser.add_argument(
-        "--config", type=str, required=True, help="Config of the dataset. *E.g.* `'en'`  for Common Voice"
+        "--config",
+        type=str,
+        required=True,
+        help="Config of the dataset. *E.g.* `'en'`  for Common Voice",
     )
-    parser.add_argument("--split", type=str, required=True, help="Split of the dataset. *E.g.* `'test'`")
+    parser.add_argument(
+        "--split", type=str, required=True, help="Split of the dataset. *E.g.* `'test'`"
+    )
 
     parser.add_argument(
-        "--log_outputs", action="store_true", help="If defined, write outputs to log file for analysis."
+        "--log_outputs",
+        action="store_true",
+        help="If defined, write outputs to log file for analysis.",
     )
     parser.add_argument(
         "--device",
@@ -93,7 +114,7 @@ if __name__ == "__main__":
         type=int,
         default=16,
         help="Number of samples to go through each streamed batch.",
-    )    
+    )
     args = parser.parse_args()
 
     main(args)
