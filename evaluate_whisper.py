@@ -1,6 +1,8 @@
 import argparse
+from typing import Dict
+
 from transformers import pipeline
-from datasets import load_dataset, Audio
+from datasets import load_dataset, Audio, Dataset
 import evaluate
 
 def norm(text):
