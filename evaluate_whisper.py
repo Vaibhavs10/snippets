@@ -80,7 +80,7 @@ def main(args):
     # do not change function below
     log_results(result, args)
 
-    if __name__ == "__main__":
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
