@@ -1,82 +1,111 @@
+import argparse
 from transformers import pipeline
 from datasets import load_dataset, Audio
 import evaluate
-from tqdm import tqdm
-
-batch_size = 16
-
-whisper_asr = pipeline("automatic-speech-recognition", model="openai/whisper-small.en", device=0)
-whisper_asr.model.config.max_length = 128
-
-# missing Earnings22, AMI, voxpopuli under facebook
-datasets = [
-    ("librispeech_asr", "other", 2620),
-    ("librispeech_asr", "clean", 2939),
-    ("LIUM/tedlium", "release3", 1469),
-    ("polinaeterna/voxpopuli", "en", 1842),
-    ("speechcolab/gigaspeech", "l", 25619),
-    ("kensho/spgispeech", "L", 39341),
-    ("mozilla-foundation/common_voice_9_0", "en", 16335),
-]
-
-
-wer = evaluate.load("wer")
-def is_valid(text):
-    # TEDLIUM
-    if text == "ignore_time_segment_in_scoring":
-        return False
-    if len(text) == 0:
-        return False
-
-    return True
-
 
 def norm(text):
     return whisper_asr.tokenizer._normalize(text)
 
+def log_results(result: Dataset, args: Dict[str, str]):
+    """DO NOT CHANGE. This function computes and logs the result metrics."""
 
-def get_text(sample):
-    if "text" in sample:
-        return sample["text"]
-    elif "sentence" in sample:
-        return sample["sentence"]
-    elif "normalized_text" in sample:
-        return sample["normalized_text"]
-    elif "transcript" in sample:
-        return sample["transcript"]
-    else:
-        raise ValueError(f"Sample: {sample.keys()} has no transcript.")
+    log_outputs = args.log_outputs
+    dataset_id = "_".join(args.dataset.split("/") + [args.config, args.split])
+
+    # load metric
+    wer = evaluate.load("wer")
+    cer = evaluate.load("cer")
+
+    # compute metrics
+    wer_result = wer.compute(references=result["target"], predictions=result["prediction"])
+    cer_result = cer.compute(references=result["target"], predictions=result["prediction"])
+
+    # print & log results
+    result_str = f"WER: {wer_result}\nCER: {cer_result}"
+    print(result_str)
+
+    with open(f"{dataset_id}_eval_results.txt", "w") as f:
+        f.write(result_str)
+
+    # log all results in text file. Possibly interesting for analysis
+    if log_outputs is not None:
+        pred_file = f"log_{dataset_id}_predictions.txt"
+        target_file = f"log_{dataset_id}_targets.txt"
+
+        with open(pred_file, "w") as p, open(target_file, "w") as t:
+
+            # mapping function to write output
+            def write_to_file(batch, i):
+                p.write(f"{i}" + "\n")
+                p.write(batch["prediction"] + "\n")
+                t.write(f"{i}" + "\n")
+                t.write(batch["target"] + "\n")
+
+            result.map(write_to_file, with_indices=True)
 
 
-def evaluate(batch):
-    audios = [a["array"] for a in batch["audio"]]
+def main(args):
+    # load dataset
+    dataset = load_dataset(args.dataset, args.config, split=args.split, use_auth_token=True)
 
-    predictions = whisper_asr(audios)
-    batch["ref"] = get_text(batch)
-    batch["pred"] = [p["text"] for p in predictions]
+    # for testing: only process the first two examples as a test
+    # dataset = dataset.select(range(10))
 
-    return batch
+    # load processor
+    feature_extractor = AutoFeatureExtractor.from_pretrained(args.model_id)
+    sampling_rate = feature_extractor.sampling_rate
 
+    # resample audio
+    dataset = dataset.cast_column("audio", Audio(sampling_rate=sampling_rate))
 
-for name, config, length in datasets:
-    print(f"Evaluating {name} - {config}")
-    dataset = load_dataset(name, config, split="test", streaming=True, use_auth_token=True)
-    dataset = dataset.cast_column("audio", Audio(sampling_rate=16000))
-    preds = []
-    refs = []
+    # load eval pipeline
+    if args.device is None:
+        args.device = 0 if torch.cuda.is_available() else -1
+    asr = pipeline("automatic-speech-recognition", model=args.model_id, device=args.device)
 
-    result_set = dataset.map(evaluate, batched=True, batch_size=batch_size, remove_columns=dataset.features.keys())
+    # map function to decode audio
+    def map_to_pred(batch):
+        prediction = asr(
+            batch["audio"]["array"]
+        )
 
-    with tqdm(total=length) as progress_bar:
-        for i, result in enumerate(iter(result_set)):
-            ref = norm(result["ref"])
-            pred = norm(result["pred"])
+        batch["prediction"] = prediction["text"]
+        batch["target"] = norm(batch["sentence"])
+        return batch
 
-            if is_valid(ref):
-                refs.append(ref)l
-                preds.append(pred)
+    # run inference on all examples
+    result = dataset.map(map_to_pred, remove_columns=dataset.column_names)
 
-            progress_bar.update(1)
+    # compute and log_results
+    # do not change function below
+    log_results(result, args)
 
-    wer_result = wer.compute(references=refs, predictions=preds)
-    wer_result = round(100 * wer_result, 2)
+    if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--model_id", type=str, required=True, help="Model identifier. Should be loadable with 🤗 Transformers"
+    )
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        required=True,
+        help="Dataset name to evaluate the `model_id`. Should be loadable with 🤗 Datasets",
+    )
+    parser.add_argument(
+        "--config", type=str, required=True, help="Config of the dataset. *E.g.* `'en'`  for Common Voice"
+    )
+    parser.add_argument("--split", type=str, required=True, help="Split of the dataset. *E.g.* `'test'`")
+
+    parser.add_argument(
+        "--log_outputs", action="store_true", help="If defined, write outputs to log file for analysis."
+    )
+    parser.add_argument(
+        "--device",
+        type=int,
+        default=None,
+        help="The device to run the pipeline on. -1 for CPU (default), 0 for the first GPU and so on.",
+    )
+    args = parser.parse_args()
+
+    main(args)
