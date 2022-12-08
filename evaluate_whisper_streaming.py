@@ -6,6 +6,10 @@ import evaluate
 
 wer = evaluate.load("wer")
 
+    whisper_asr = pipeline(
+        "automatic-speech-recognition", model=args.model_id, device=args.device
+    )
+    whisper_asr.model.config.max_length = 128
 
 whisper_norm = whisper_asr.tokenizer._normalize
 
@@ -42,11 +46,6 @@ def data(dataset):
 
 def main(args):
     batch_size = args.batch_size
-
-    whisper_asr = pipeline(
-        "automatic-speech-recognition", model=args.model_id, device=args.device
-    )
-    whisper_asr.model.config.max_length = 128
 
     dataset = load_dataset(
         args.dataset, args.config, split=args.split, streaming=True, use_auth_token=True
