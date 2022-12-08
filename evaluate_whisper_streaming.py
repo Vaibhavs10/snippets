@@ -4,19 +4,7 @@ from transformers import pipeline
 from datasets import load_dataset, Audio
 import evaluate
 
-wer = evaluate.load("wer")
-
-    whisper_asr = pipeline(
-        "automatic-speech-recognition", model=args.model_id, device=args.device
-    )
-    whisper_asr.model.config.max_length = 128
-
-whisper_norm = whisper_asr.tokenizer._normalize
-
-
-def normalise(batch):
-    batch["norm_text"] = whisper_norm(get_text(batch))
-    return batch
+wer_metric = evaluate.load("wer")
 
 
 def is_target_text_in_range(ref):
@@ -46,6 +34,16 @@ def data(dataset):
 
 def main(args):
     batch_size = args.batch_size
+    whisper_asr = pipeline(
+        "automatic-speech-recognition", model=args.model_id, device=args.device
+    )
+    whisper_asr.model.config.max_length = 128
+
+    whisper_norm = whisper_asr.tokenizer._normalize
+
+    def normalise(batch):
+        batch["norm_text"] = whisper_norm(get_text(batch))
+        return batch
 
     dataset = load_dataset(
         args.dataset, args.config, split=args.split, streaming=True, use_auth_token=True
@@ -55,14 +53,14 @@ def main(args):
     dataset = dataset.take(64)
 
     dataset = dataset.cast_column("audio", Audio(sampling_rate=16000))
-    dataset = datset.map(normalise)
+    dataset = dataset.map(normalise)
     dataset = dataset.filter(is_target_text_in_range, input_columns=["norm_text"])
 
     predictions = []
     references = []
 
     # run streamed inference
-    for out in whisper_asr(data(dataset), batch_size=BATCH_SIZE):
+    for out in whisper_asr(data(dataset), batch_size=batch_size):
         predictions.append(whisper_norm(out["text"]))
         references.append(out["reference"][0])
 
@@ -97,11 +95,6 @@ if __name__ == "__main__":
         "--split", type=str, required=True, help="Split of the dataset. *E.g.* `'test'`"
     )
 
-    parser.add_argument(
-        "--log_outputs",
-        action="store_true",
-        help="If defined, write outputs to log file for analysis.",
-    )
     parser.add_argument(
         "--device",
         type=int,
