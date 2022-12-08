@@ -7,8 +7,19 @@ import evaluate
 wer = evaluate.load("wer")
 
 
-def norm(text):
-    return whisper_asr.tokenizer._normalize(text)
+whisper_norm = whisper_asr.tokenizer._normalize
+
+
+def normalise(batch):
+    batch["norm_text"] = whisper_norm(get_text(batch))
+    return batch
+
+
+def is_target_text_in_range(ref):
+    if ref.strip() == "ignore time segment in scoring":
+        return False
+    else:
+        return ref.strip() != ""
 
 
 def get_text(sample):
@@ -24,14 +35,9 @@ def get_text(sample):
         raise ValueError(f"Sample: {sample.keys()} has no transcript.")
 
 
-def evaluate(batch):
-    audios = [a["array"] for a in batch["audio"]]
-
-    predictions = whisper_asr(audios)
-    batch["ref"] = get_text(batch)
-    batch["pred"] = [p["text"] for p in predictions]
-
-    return batch
+def data(dataset):
+    for i, item in enumerate(dataset):
+        yield {**item["audio"], "reference": item["norm_text"]}
 
 
 def main(args):
@@ -50,27 +56,21 @@ def main(args):
     dataset = dataset.take(64)
 
     dataset = dataset.cast_column("audio", Audio(sampling_rate=16000))
-    preds = []
-    refs = []
+    dataset = datset.map(normalise)
+    dataset = dataset.filter(is_target_text_in_range, input_columns=["norm_text"])
 
-    result_set = dataset.map(
-        evaluate,
-        batched=True,
-        batch_size=batch_size,
-        remove_columns=dataset.features.keys(),
-    )
+    predictions = []
+    references = []
 
-    for i, result in enumerate(iter(result_set)):
-        ref = norm(result["ref"])
-        pred = norm(result["pred"])
+    # run streamed inference
+    for out in whisper_asr(data(dataset), batch_size=BATCH_SIZE):
+        predictions.append(whisper_norm(out["text"]))
+        references.append(out["reference"][0])
 
-        refs.append(ref)
-        preds.append(pred)
+    wer = wer_metric.compute(references=references, predictions=predictions)
+    wer = round(100 * wer, 2)
 
-    wer_result = wer.compute(references=refs, predictions=preds)
-    wer_result = round(100 * wer_result, 2)
-
-    print(wer_result)
+    print("WER:", wer)
 
 
 if __name__ == "__main__":
